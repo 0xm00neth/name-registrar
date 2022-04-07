@@ -10,13 +10,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  */
 contract NameRegistrar is Ownable {
     /// @dev user => commitment hash
-    mapping(address => bytes32) private commits;
+    mapping(address => bytes32) public commits;
 
     /// @dev name => owner
-    mapping(string => address) private registered;
+    mapping(string => address) public registered;
 
     /// @dev name => expiresAt timestamp
-    mapping(string => uint256) private expiresAt;
+    mapping(string => uint256) public expiresAt;
 
     /// @dev user => name
     mapping(address => string) public names;
@@ -34,7 +34,7 @@ contract NameRegistrar is Ownable {
     uint256 public constant LOCK_AMOUNT = 0.5 ether;
 
     /// @dev locks for 10 days
-    uint256 public constant LOCK_PERIOD = 10 * 24 * 60 * 60;
+    uint256 public constant LOCK_PERIOD = 10 days;
 
     /// @dev restrict gas price to 200 gwei to prevent front-running
     uint256 public constant MAX_GAS_PRICE = 200e9;
@@ -59,16 +59,20 @@ contract NameRegistrar is Ownable {
     /**
      * @notice commit hash to register name
      * @dev stores hash and checks later in reveal()
+     * user should not have registered another name
      * @param hash commitment hash
      */
     function commit(bytes32 hash) public onePerBlock restrictGas {
+        string memory name = getName(msg.sender);
+        require(bytes(name).length == 0, "user already have name");
+
         commits[msg.sender] = hash;
     }
 
     /**
      * @notice reveal & register name
      * @dev reveal commited hash and register user a name
-     * user should not have named already registered or the registered name should be expired
+     * name should not be registered or should be expired
      * name registration fee = name length * PRICE_PER_CHAR
      * locks LOCK_AMOUNT for LOCK_PERIOD
      * registered name can be renewed before it gets expired
@@ -87,7 +91,7 @@ contract NameRegistrar is Ownable {
         bytes32 d = digest(nonce, name, msg.sender);
         require(commits[msg.sender] == d, "invalid data");
         require(
-            registered[name] == address(0) || expiresAt[name] > block.timestamp,
+            registered[name] == address(0) || expiresAt[name] <= block.timestamp,
             "already registered"
         );
         uint256 fee = bytes(name).length * PRICE_PER_CHAR;
@@ -96,12 +100,9 @@ contract NameRegistrar is Ownable {
             "insufficient fee and lock amount"
         );
 
-        string memory oldName = names[msg.sender];
-        require(
-            bytes(oldName).length == 0 || expiresAt[oldName] > block.timestamp,
-            "user already have name"
-        );
-
+        if (registered[name] != address(0)) {
+            names[registered[name]] = "";
+        }
         registered[name] = msg.sender;
         names[msg.sender] = name;
 
@@ -126,7 +127,7 @@ contract NameRegistrar is Ownable {
     function renew(string memory name) public {
         require(
             registered[name] == msg.sender &&
-                expiresAt[name] <= block.timestamp,
+                expiresAt[name] > block.timestamp,
             "not registered or already expired"
         );
         expiresAt[name] = block.timestamp + LOCK_PERIOD;
@@ -158,7 +159,7 @@ contract NameRegistrar is Ownable {
         string memory name = names[msg.sender];
         require(bytes(name).length > 2, "no name registered");
         require(expiresAt[name] <= block.timestamp, "name not expired yet");
-        require(locked[msg.sender], "already unlocked balance");
+        require(locked[msg.sender], "already unlocked");
         locked[msg.sender] = false;
 
         transferETH(payable(msg.sender), LOCK_AMOUNT);
@@ -179,7 +180,7 @@ contract NameRegistrar is Ownable {
      */
     function getName(address user) public view returns (string memory) {
         string memory name = names[user];
-        if (bytes(name).length > 2 && expiresAt[name] <= block.timestamp) {
+        if (bytes(name).length > 2 && expiresAt[name] > block.timestamp) {
             return name;
         }
         return "";
